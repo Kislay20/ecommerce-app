@@ -2,8 +2,6 @@
 
 const express = require("express");
 const cors = require("cors");
-// --- CORRECTED IMPORT ---
-// Import the builder along with the client and environment
 const { StandardCheckoutClient, Env, StandardCheckoutPayRequest } = require("pg-sdk-node"); 
 const { randomUUID } = require("crypto");
 const admin = require("firebase-admin");
@@ -25,9 +23,20 @@ const BACKEND_URL = isProduction ? process.env.PROD_BACKEND_URL : process.env.DE
 const FRONTEND_URL = isProduction ? process.env.PROD_FRONTEND_URL : process.env.DEV_FRONTEND_URL;
 
 
-// Firebase Admin SDK Configuration
-// Make sure you have the 'firebase-service-account.json' file in your project root
-const serviceAccount = require("./firebase-service-account.json");
+// ✅ FIX: Securely initialize Firebase Admin SDK for both environments
+let serviceAccount;
+if (isProduction) {
+    // On Render, parse the service account from the environment variable
+    if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+        serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+    } else {
+        console.error("FATAL ERROR: FIREBASE_SERVICE_ACCOUNT_JSON environment variable is not set for production.");
+        process.exit(1);
+    }
+} else {
+    // For local development, load from the file
+    serviceAccount = require("./firebase-service-account.json");
+}
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
