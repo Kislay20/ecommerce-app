@@ -1,0 +1,12 @@
+# Dependencies
+/node_modules
+
+# Environment Variables (Secrets)
+.env
+firebase-service-account.json
+
+# Log files
+*.log
+
+# misc
+.DS_Store
