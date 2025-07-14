@@ -20,7 +20,7 @@ const MERCHANT_ID = process.env.MERCHANT_ID; // Your PhonePe Merchant ID
 
 
 // ✅ Conditionally set URLs based on the environment
-const isProduction = NODE_ENV === 'production';
+const isProduction = process.env.NODE_ENV === 'production';
 const BACKEND_URL = isProduction ? process.env.PROD_BACKEND_URL : process.env.DEV_BACKEND_URL;
 const FRONTEND_URL = isProduction ? process.env.PROD_FRONTEND_URL : process.env.DEV_FRONTEND_URL;
 
