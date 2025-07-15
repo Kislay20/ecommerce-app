@@ -1,5 +1,3 @@
-// backend/server.js
-
 const express = require("express");
 const cors = require("cors");
 const {
@@ -9,21 +7,20 @@ const {
 } = require("pg-sdk-node");
 const { randomUUID } = require("crypto");
 const admin = require("firebase-admin");
+const sgMail = require("@sendgrid/mail"); // For sending emails
 
 // --- CONFIGURATION ---
-// Load environment variables from a .env file
 require("dotenv").config();
 
 const PORT = process.env.PORT || 5000;
 const isProduction = process.env.NODE_ENV === "production";
 
-// --- PhonePe Credentials (Loaded from .env) ---
-const PHONEPE_CLIENT_ID = process.env.PHONEPE_CLIENT_ID;
-const PHONEPE_CLIENT_SECRET = process.env.PHONEPE_CLIENT_SECRET;
-const PHONEPE_CLIENT_VERSION = 1; // As per docs
-const MERCHANT_ID = process.env.MERCHANT_ID;
+// --- Email Configuration ---
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+const SENDER_EMAIL = "kislayjha844@gmail.com"; // IMPORTANT: Change to your SendGrid verified sender
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 
-// --- Environment-specific URLs (Loaded from .env) ---
+// --- Environment-specific URLs (from .env) ---
 const BACKEND_URL = isProduction
   ? process.env.PROD_BACKEND_URL
   : process.env.DEV_BACKEND_URL;
@@ -31,20 +28,16 @@ const FRONTEND_URL = isProduction
   ? process.env.PROD_FRONTEND_URL
   : process.env.DEV_FRONTEND_URL;
 
-// --- Securely initialize Firebase Admin SDK for both environments ---
+// --- Securely initialize Firebase Admin SDK ---
 let serviceAccount;
 if (isProduction) {
-  // On a hosting service like Render, parse the service account from the environment variable
   if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
     serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
   } else {
-    console.error(
-      "FATAL ERROR: FIREBASE_SERVICE_ACCOUNT_JSON environment variable is not set for production."
-    );
+    console.error("FATAL ERROR: FIREBASE_SERVICE_ACCOUNT_JSON is not set.");
     process.exit(1);
   }
 } else {
-  // For local development, load from the file
   serviceAccount = require("./firebase-service-account.json");
 }
 
@@ -57,64 +50,105 @@ const db = admin.firestore();
 // --- INITIALIZATION ---
 const app = express();
 app.use(cors());
-app.use(
-  express.json({
-    verify: (req, res, buf) => {
-      req.rawBody = buf;
-    },
-  })
-);
+app.use(express.json());
 
-// --- Initialize PhonePe client based on the environment ---
-// const phonepeEnv = isProduction ? Env.PRODUCTION : Env.SANDBOX; // Use PRODUCTION for live, SANDBOX for testing
-// Force sandbox mode for the presentation, regardless of NODE_ENV
+// --- Initialize PhonePe client ---
+// This is forced to SANDBOX for your presentation demo.
+// Change back to `isProduction ? Env.PRODUCTION : Env.SANDBOX` for real live payments.
 const phonepeEnv = Env.SANDBOX;
+
 const phonepeClient = StandardCheckoutClient.getInstance(
-  PHONEPE_CLIENT_ID,
-  PHONEPE_CLIENT_SECRET,
-  PHONEPE_CLIENT_VERSION,
+  process.env.PHONEPE_CLIENT_ID,
+  process.env.PHONEPE_CLIENT_SECRET,
+  1, // Client Version
   phonepeEnv
 );
 
-console.log(
-  `--- Server starting in ${
-    isProduction ? "PRODUCTION" : "DEVELOPMENT"
-  } mode ---`
-);
-console.log("MERCHANT_ID:", MERCHANT_ID);
-console.log("PHONEPE_CLIENT_ID:", PHONEPE_CLIENT_ID);
-console.log("PHONEPE_ENV:", phonepeEnv);
-console.log("---------------------------------");
+console.log(`--- Server starting in ${isProduction ? "PRODUCTION" : "DEVELOPMENT"} mode ---`);
+console.log(`--- PhonePe environment is set to: ${phonepeEnv} ---`);
+
+// --- EMAIL HELPER FUNCTIONS ---
+
+const createOrderConfirmationHtml = (order) => {
+  const productsHtml = order.products.map(p => `
+    <tr>
+      <td style="padding: 8px; border: 1px solid #ddd;">${p.name}</td>
+      <td style="padding: 8px; border: 1px solid #ddd;">${p.quantity}</td>
+      <td style="padding: 8px; border: 1px solid #ddd;">₹${p.price.toLocaleString()}</td>
+    </tr>
+  `).join('');
+
+  return `
+    <div style="font-family: Arial, sans-serif; line-height: 1.6;">
+      <h2>Your Order #${order.merchantOrderId} is Confirmed!</h2>
+      <p>Thank you for your purchase. We've received your order and are getting it ready.</p>
+      <h3>Order Summary</h3>
+      <table style="width: 100%; border-collapse: collapse;">
+        <thead style="background-color: #f2f2f2;">
+          <tr>
+            <th style="padding: 8px; border: 1px solid #ddd;">Product</th>
+            <th style="padding: 8px; border: 1px solid #ddd;">Quantity</th>
+            <th style="padding: 8px; border: 1px solid #ddd;">Price</th>
+          </tr>
+        </thead>
+        <tbody>${productsHtml}</tbody>
+      </table>
+      <h3 style="text-align: right;">Total: ₹${order.amount.toLocaleString()}</h3>
+      <p>We'll notify you again once your order has shipped.</p>
+    </div>
+  `;
+};
+
+const createAdminNotificationHtml = (order) => {
+    const productsHtml = order.products.map(p => `<li>${p.name} (x${p.quantity}) - ₹${p.price.toLocaleString()}</li>`).join('');
+    const shipping = order.shippingDetails;
+    return `
+      <div style="font-family: Arial, sans-serif; line-height: 1.6;">
+        <h2>🔔 New Order Received: #${order.merchantOrderId}</h2>
+        <p>A new order has been placed on the website.</p>
+        <ul>
+          <li><strong>Order ID:</strong> ${order.merchantOrderId}</li>
+          <li><strong>Total Amount:</strong> ₹${order.amount.toLocaleString()}</li>
+          <li><strong>Customer Email:</strong> ${shipping.email}</li>
+        </ul>
+        <h3>Shipping Details</h3>
+        <p>
+          ${shipping.name}<br>
+          ${shipping.address}<br>
+          ${shipping.city}, ${shipping.state} ${shipping.zip}<br>
+          Phone: ${shipping.phone}
+        </p>
+        <h3>Items Ordered</h3>
+        <ul>${productsHtml}</ul>
+      </div>
+    `;
+};
+
 
 // --- API ENDPOINTS ---
 
 /**
  * @route   POST /api/pay
  * @desc    Initiate a payment with PhonePe
- * @access  Public
  */
 app.post("/api/pay", async (req, res) => {
   try {
     const { amount, products, shippingDetails, userId } = req.body;
 
     if (!amount || !products || !shippingDetails || !userId) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Missing required payment data." });
+      return res.status(400).json({ success: false, message: "Missing required payment data." });
     }
 
     const merchantOrderId = `M-${randomUUID().slice(0, 6)}`;
-
     const redirectUrl = `${FRONTEND_URL}/payment-status/${merchantOrderId}`;
     const callbackUrl = `${BACKEND_URL}/api/callback`;
 
-    // Create initial order in Firestore
     await db.collection("orders").doc(merchantOrderId).set({
       merchantOrderId,
       userId,
       amount,
       products,
-      shippingDetails,
+      shippingDetails, // This now includes the user's email
       status: "PENDING",
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
@@ -131,40 +165,22 @@ app.post("/api/pay", async (req, res) => {
 
     const response = await phonepeClient.pay(payRequest);
 
-    console.log("PhonePe API Response:", response);
-
-    // ✅ Save PhonePe's actual orderId as merchantTransactionId
     if (response && response.orderId) {
       await db.collection("orders").doc(merchantOrderId).update({
         merchantTransactionId: response.orderId,
       });
     }
 
-    if (response && response.redirectUrl) {
-      res.json({
-        success: true,
-        redirectUrl: response.redirectUrl,
-        merchantOrderId,
-      });
-    } else {
-      res.status(500).json({
-        success: false,
-        message: response.message || "Could not get payment URL.",
-      });
-    }
+    res.json({ success: true, redirectUrl: response.redirectUrl, merchantOrderId });
   } catch (error) {
     console.error("Error in /api/pay:", error);
-    res.status(500).json({
-      success: false,
-      message: "An error occurred while initiating payment.",
-    });
+    res.status(500).json({ success: false, message: "An error occurred while initiating payment." });
   }
 });
 
 /**
  * @route   POST /api/callback
  * @desc    PhonePe Server-to-Server Callback
- * @access  Public (from PhonePe servers)
  */
 app.post("/api/callback", async (req, res) => {
   try {
@@ -172,132 +188,103 @@ app.post("/api/callback", async (req, res) => {
     const xVerifyHeader = req.headers["x-verify"];
 
     if (!callbackResponse || !xVerifyHeader) {
-      return res
-        .status(400)
-        .send({ success: false, message: "Invalid callback" });
+      return res.status(400).send({ success: false, message: "Invalid callback" });
     }
 
-    const decodedResponse = JSON.parse(
-      Buffer.from(callbackResponse.response, "base64").toString("utf8")
-    );
-
+    const decodedResponse = JSON.parse(Buffer.from(callbackResponse.response, "base64").toString("utf8"));
     const merchantOrderId = decodedResponse.data.merchantOrderId;
-
-    console.log(
-      `Callback received for order: ${merchantOrderId}`,
-      decodedResponse
-    );
-
     const orderRef = db.collection("orders").doc(merchantOrderId);
 
     if (decodedResponse.success) {
-      console.log(
-        `Payment successful for ${merchantOrderId}. Updating status.`
-      );
+      console.log(`Payment successful for ${merchantOrderId}.`);
       await orderRef.update({
         status: "COMPLETED",
         phonepeTransactionId: decodedResponse.data.transactionId,
         paymentState: decodedResponse.code,
       });
+
+      // --- SEND EMAILS ON SUCCESS ---
+      try {
+        const orderDoc = await orderRef.get();
+        if (orderDoc.exists) {
+            const orderData = orderDoc.data();
+            const userEmail = orderData.shippingDetails.email;
+
+            if (userEmail) {
+                // Send confirmation email to the user
+                await sgMail.send({
+                    to: userEmail,
+                    from: SENDER_EMAIL,
+                    subject: `Order Confirmed: #${orderData.merchantOrderId}`,
+                    html: createOrderConfirmationHtml(orderData),
+                });
+                console.log(`Confirmation email sent to ${userEmail}`);
+
+                // Send notification email to the admin
+                if (ADMIN_EMAIL) {
+                    await sgMail.send({
+                        to: ADMIN_EMAIL,
+                        from: SENDER_EMAIL,
+                        subject: `🔔 New Order Received: #${orderData.merchantOrderId}`,
+                        html: createAdminNotificationHtml(orderData),
+                    });
+                    console.log(`Admin notification sent to ${ADMIN_EMAIL}`);
+                }
+            }
+        }
+      } catch (emailError) {
+          console.error("Error sending emails:", emailError.response?.body || emailError.message);
+      }
     } else {
-      console.log(`Payment failed for ${merchantOrderId}. Updating status.`);
-      await orderRef.update({
-        status: "FAILED",
-        paymentState: decodedResponse.code,
-      });
+      await orderRef.update({ status: "FAILED", paymentState: decodedResponse.code });
     }
 
     res.status(200).send();
-    console.log("Received PhonePe callback ✅");
-    console.log("Headers:", req.headers);
-    console.log("Body:", req.body);
   } catch (error) {
     console.error("Error in /api/callback:", error);
-    res
-      .status(500)
-      .send({ success: false, message: "Error processing callback." });
+    res.status(500).send({ success: false, message: "Error processing callback." });
   }
 });
-
 
 /**
  * @route   GET /api/payment/status/:merchantOrderId
- * @desc    Check payment status using the PhonePe SDK
- * @access  Public
+ * @desc    Check payment status from the frontend
  */
 app.get("/api/payment/status/:merchantOrderId", async (req, res) => {
   const { merchantOrderId } = req.params;
-
-  if (!merchantOrderId) {
-    return res
-      .status(400)
-      .json({ success: false, message: "Merchant Order ID is required." });
-  }
-
   try {
-    console.log(`Checking status for order: ${merchantOrderId}`);
-
     const statusResponse = await phonepeClient.getOrderStatus(merchantOrderId);
-
-    console.log("✅ PhonePe SDK Status Response:", statusResponse);
-
-    // ✅ CORRECTED a condition to check for a valid response state
     if (statusResponse && statusResponse.state) {
-      const paymentState = statusResponse.state; // 'COMPLETED', 'FAILED', 'PENDING'
-      let finalStatus = paymentState; // Directly use the state from the response
-
-      // Update your Firestore database
+      const paymentState = statusResponse.state;
       const orderRef = db.collection("orders").doc(merchantOrderId);
       await orderRef.update({
-        status: finalStatus,
+        status: paymentState,
         paymentState: paymentState,
         phonepeTransactionId: statusResponse.paymentDetails?.[0]?.transactionId || null,
       });
-      console.log(`Updated Firestore status for ${merchantOrderId} to ${finalStatus}`);
-      
       const updatedOrderData = (await orderRef.get()).data();
-
-      return res.json({ 
-        success: true, 
-        status: finalStatus, 
-        order: updatedOrderData 
-      });
-
+      return res.json({ success: true, status: paymentState, order: updatedOrderData });
     } else {
-      // This block will now correctly handle cases where the SDK truly fails
-      return res.status(500).json({
-        success: false,
-        message: statusResponse.message || "Failed to retrieve payment status.",
-      });
+      return res.status(500).json({ success: false, message: "Failed to retrieve payment status." });
     }
   } catch (error) {
     console.error("Final status check error:", error.message);
-    return res.status(500).json({
-      success: false,
-      message: "Error during final status check.",
-    });
+    return res.status(500).json({ success: false, message: "Error during final status check." });
   }
 });
-
-
-
-// backend/server.js
 
 /**
  * @route   GET /api/orders/:userId
  * @desc    Get all orders for a specific user
- * @access  Public (or Protected if you have auth)
  */
 app.get("/api/orders/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
     const orders = [];
-
-    // Query the 'orders' collection where the 'userId' field matches
     const snapshot = await db
       .collection("orders")
       .where("userId", "==", userId)
-      .orderBy("createdAt", "desc") // Show newest orders first
+      .orderBy("createdAt", "desc")
       .get();
 
     if (snapshot.empty) {
@@ -315,11 +302,8 @@ app.get("/api/orders/:userId", async (req, res) => {
   }
 });
 
-
 app.listen(PORT, () => {
   console.log(
-    `Server is listening on port ${PORT} in ${
-      process.env.NODE_ENV || "development"
-    } mode.`
+    `Server is listening on port ${PORT} in ${process.env.NODE_ENV || "development"} mode.`
   );
 });
