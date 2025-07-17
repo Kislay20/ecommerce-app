@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const uaParser = require('ua-parser-js');
 const {
   StandardCheckoutClient,
   Env,
@@ -300,6 +301,56 @@ app.get("/api/orders/:userId", async (req, res) => {
     console.error("Error fetching orders:", error);
     res.status(500).json({ success: false, message: "Error fetching orders." });
   }
+});
+
+app.post("/api/login-session", async (req, res) => {
+    const { uid } = req.body; // You must get the user's UID after they log in
+    if (!uid) return res.status(400).json({ success: false, message: "User ID is required." });
+
+    const ip = req.ip;
+    const ua = uaParser(req.headers['user-agent']);
+    const sessionId = randomUUID();
+
+    const sessionData = {
+        ipAddress: ip,
+        deviceType: ua.device.type || 'desktop',
+        browser: `${ua.browser.name} ${ua.browser.version}`,
+        os: `${ua.os.name} ${ua.os.version}`,
+        lastSeen: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    await db.collection('users').doc(uid).collection('sessions').doc(sessionId).set(sessionData);
+    res.json({ success: true, sessionId });
+});
+
+// GET all active sessions for a user
+app.get('/api/sessions/:userId', async (req, res) => {
+    const { userId } = req.params;
+    const sessions = [];
+    const snapshot = await db.collection('users').doc(userId).collection('sessions').orderBy('lastSeen', 'desc').get();
+    snapshot.forEach(doc => {
+        sessions.push({ id: doc.id, ...doc.data() });
+    });
+    res.json({ success: true, sessions });
+});
+
+// POST to log out from ALL devices
+app.post('/api/sessions/logout-all', async (req, res) => {
+    const { userId } = req.body;
+    await admin.auth().revokeRefreshTokens(userId);
+    // You should also delete all session documents here for a clean slate
+    const snapshot = await db.collection('users').doc(userId).collection('sessions').get();
+    const batch = db.batch();
+    snapshot.docs.forEach(doc => batch.delete(doc.ref));
+    await batch.commit();
+    res.json({ success: true, message: "Logged out from all devices." });
+});
+
+// POST to log out a specific device
+app.post('/api/sessions/logout-specific', async (req, res) => {
+    const { userId, sessionId } = req.body;
+    await db.collection('users').doc(userId).collection('sessions').doc(sessionId).delete();
+    res.json({ success: true, message: "Session removed." });
 });
 
 app.listen(PORT, () => {

@@ -17,6 +17,7 @@
     "dotenv": "^17.2.0",
     "express": "^5.1.0",
     "firebase-admin": "^13.4.0",
-    "pg-sdk-node": "https://phonepe.mycloudrepo.io/public/repositories/phonepe-pg-sdk-node/releases/v2/phonepe-pg-sdk-node.tgz"
+    "pg-sdk-node": "https://phonepe.mycloudrepo.io/public/repositories/phonepe-pg-sdk-node/releases/v2/phonepe-pg-sdk-node.tgz",
+    "ua-parser-js": "^2.0.4"
   }
 }
