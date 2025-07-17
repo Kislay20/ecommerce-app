@@ -18,7 +18,7 @@ const isProduction = process.env.NODE_ENV === "production";
 
 // --- Email Configuration ---
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-const SENDER_EMAIL = "kislayjha844@gmail.com"; // IMPORTANT: Change to your SendGrid verified sender
+const SENDER_EMAIL = "kislayjha844@gmail.com"; 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 
 // --- Environment-specific URLs (from .env) ---
@@ -54,7 +54,6 @@ app.use(cors());
 app.use(express.json());
 
 // --- Initialize PhonePe client ---
-// This is forced to SANDBOX for your presentation demo.
 // Change back to `isProduction ? Env.PRODUCTION : Env.SANDBOX` for real live payments.
 const phonepeEnv = Env.SANDBOX;
 
@@ -134,25 +133,37 @@ const createAdminNotificationHtml = (order) => {
  */
 app.post("/api/pay", async (req, res) => {
   try {
-    const { amount, products, shippingDetails, userId } = req.body;
+    // ✅ Destructure the new optional field from the request body
+    const { amount, products, shippingDetails, userId, existingMerchantOrderId } = req.body;
 
     if (!amount || !products || !shippingDetails || !userId) {
       return res.status(400).json({ success: false, message: "Missing required payment data." });
     }
 
-    const merchantOrderId = `M-${randomUUID().slice(0, 6)}`;
+    let merchantOrderId;
+
+    // ✅ This new logic handles both new orders and retries
+    if (existingMerchantOrderId) {
+      // If it's a retry, reuse the existing order ID
+      merchantOrderId = existingMerchantOrderId;
+      console.log(`Retrying payment for existing order: ${merchantOrderId}`);
+    } else {
+      // If it's a new order, generate a new ID and create a new document
+      merchantOrderId = `M-${randomUUID().slice(0, 6)}`;
+      console.log(`Creating new order: ${merchantOrderId}`);
+      await db.collection("orders").doc(merchantOrderId).set({
+        merchantOrderId,
+        userId,
+        amount,
+        products,
+        shippingDetails,
+        status: "PENDING",
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    }
+
     const redirectUrl = `${FRONTEND_URL}/payment-status/${merchantOrderId}`;
     const callbackUrl = `${BACKEND_URL}/api/callback`;
-
-    await db.collection("orders").doc(merchantOrderId).set({
-      merchantOrderId,
-      userId,
-      amount,
-      products,
-      shippingDetails, // This now includes the user's email
-      status: "PENDING",
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
 
     const payRequest = StandardCheckoutPayRequest.builder()
       .merchantOrderId(merchantOrderId)
@@ -166,6 +177,7 @@ app.post("/api/pay", async (req, res) => {
 
     const response = await phonepeClient.pay(payRequest);
 
+    // This part of the logic remains the same
     if (response && response.orderId) {
       await db.collection("orders").doc(merchantOrderId).update({
         merchantTransactionId: response.orderId,
