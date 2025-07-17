@@ -336,14 +336,26 @@ app.get('/api/sessions/:userId', async (req, res) => {
 
 // POST to log out from ALL devices
 app.post('/api/sessions/logout-all', async (req, res) => {
-    const { userId } = req.body;
+    // ✅ It now accepts a currentSessionId to know which session to KEEP
+    const { userId, currentSessionId } = req.body;
+    if (!userId || !currentSessionId) {
+        return res.status(400).json({ success: false, message: "User ID and Current Session ID are required." });
+    }
+
+    // 1. Revoke all tokens to force re-login on other devices
     await admin.auth().revokeRefreshTokens(userId);
-    // You should also delete all session documents here for a clean slate
+
+    // 2. Delete all session documents EXCEPT the current one
     const snapshot = await db.collection('users').doc(userId).collection('sessions').get();
     const batch = db.batch();
-    snapshot.docs.forEach(doc => batch.delete(doc.ref));
+    snapshot.docs.forEach(doc => {
+        if (doc.id !== currentSessionId) { // ✅ The crucial check
+            batch.delete(doc.ref);
+        }
+    });
     await batch.commit();
-    res.json({ success: true, message: "Logged out from all devices." });
+
+    res.json({ success: true, message: "Logged out from all other devices." });
 });
 
 // POST to log out a specific device
