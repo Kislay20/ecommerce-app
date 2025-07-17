@@ -323,17 +323,6 @@ app.post("/api/login-session", async (req, res) => {
     res.json({ success: true, sessionId });
 });
 
-// GET all active sessions for a user
-app.get('/api/sessions/:userId', async (req, res) => {
-    const { userId } = req.params;
-    const sessions = [];
-    const snapshot = await db.collection('users').doc(userId).collection('sessions').orderBy('lastSeen', 'desc').get();
-    snapshot.forEach(doc => {
-        sessions.push({ id: doc.id, ...doc.data() });
-    });
-    res.json({ success: true, sessions });
-});
-
 // POST to log out from ALL devices
 app.post('/api/sessions/logout-all', async (req, res) => {
     // ✅ It now accepts a currentSessionId to know which session to KEEP
